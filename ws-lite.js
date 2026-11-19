@@ -24,6 +24,8 @@ class WebSocket extends EventEmitter {
     this.socket.write(Buffer.concat([h, payload]));
   }
   send(text) { if (this.readyState === WebSocket.OPEN) this.frame(1, Buffer.from(String(text))); }
+  ping() { if (this.readyState === WebSocket.OPEN) this.frame(9); }
+  terminate() { this.socket.destroy(); }
   close(code = 1000, reason = '') {
     if (this.readyState !== WebSocket.OPEN) return;
     this.readyState = 2;
@@ -57,7 +59,7 @@ class WebSocket extends EventEmitter {
       for (let i = 0; i < payload.length; ++i) payload[i] ^= mask[i % 4];
       if (opcode === 8) { this.close(); return; }
       if (opcode === 9) { if (!fin || len > 125) return this.close(1002); this.frame(10, payload); continue; }
-      if (opcode === 10) continue;
+      if (opcode === 10) { this.emit('pong'); continue; }
       if (opcode === 1 && this.fragmented === null) {
         if (fin) this.emit('message', payload);
         else { this.fragmented = 1; this.parts = [payload]; this.partSize = len; }
