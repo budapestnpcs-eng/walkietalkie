@@ -131,6 +131,10 @@ async function connect() {
   setStatus('Mikrofon engedélyezése…', 'Engedélyezd a mikrofon használatát');
   try {
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('A mikrofonhoz HTTPS vagy localhost szükséges.');
+    const roomResp = await fetch('/api/room', { cache: 'no-store' });
+    if (!roomResp.ok) throw new Error('Nem sikerült ellenőrizni a szoba állapotát. Jelentkezz be újra.');
+    const roomInfo = await roomResp.json();
+    if (roomInfo.count >= roomInfo.capacity) throw new Error('A szoba valóban tele van (2 / 2). Ha te vagy bent egy másik lapon, ott bontsd a kapcsolatot.');
     const configResp = await fetch('/api/config');
     if (!configResp.ok) throw new Error('Lejárt a bejelentkezés. Lépj be újra.');
     iceServers = (await configResp.json()).iceServers;
@@ -145,10 +149,24 @@ async function connect() {
       try { onSignal(JSON.parse(event.data)).catch(err => { console.error(err); message('Hiba a hangkapcsolat felépítése közben. Csatlakozz újra.'); }); }
       catch (err) { console.error(err); }
     };
-    socket.onclose = () => {
+    socket.onclose = async event => {
       if (ws !== socket) return;
       cleanup();
-      if (!intentionalDisconnect) { setStatus('Nincs kapcsolat', 'A szoba tele lehet, vagy megszakadt a szerverkapcsolat'); message('Egyszerre legfeljebb két bejelentkezett eszköz csatlakozhat. Próbálkozz újra.'); }
+      if (!intentionalDisconnect) {
+        let detail = 'A WebSocket-kapcsolat megszakadt.';
+        try {
+          const response = await fetch('/api/room', { cache: 'no-store' });
+          if (response.status === 401) detail = 'Lejárt a bejelentkezés. Jelentkezz be újra.';
+          else if (response.ok) {
+            const room = await response.json();
+            detail = room.count >= 2
+              ? 'A szoba tényleg tele van (2 / 2).'
+              : 'A szoba nem tele (' + room.count + ' / 2). A WebSocket-kapcsolat hibásodott meg. Ellenőrizd a Render Logs naplót.';
+          }
+        } catch { detail = 'A szerver nem érhető el. Ellenőrizd a Render állapotát.'; }
+        setStatus('Nincs kapcsolat', 'WebSocket hiba (kód: ' + event.code + ')');
+        message(detail);
+      }
     };
     socket.onerror = () => { setStatus('Kapcsolódási hiba', 'Nem sikerült elérni a szervert'); };
     message('Várakozás a másik félre…');
