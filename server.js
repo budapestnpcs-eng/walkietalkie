@@ -84,6 +84,10 @@ function releaseFloor(ws) {
 const server = http.createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { authenticated: !!getSession(req) });
+  if (pathname === '/api/room' && req.method === 'GET') {
+    if (!getSession(req)) return json(res, 401, { error: 'Bejelentkezés szükséges' });
+    return json(res, 200, { count: peers.size, capacity: 2 });
+  }
   if (pathname === '/api/config' && req.method === 'GET') {
     if (!getSession(req)) return json(res, 401, { error: 'Bejelentkezés szükséges' });
     const servers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -133,15 +137,19 @@ const server = http.createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 server.on('upgrade', (req, socket, head) => {
-  if (new URL(req.url, 'http://localhost').pathname !== '/signal' || !validOrigin(req)) { socket.destroy(); return; }
+  if (new URL(req.url, 'http://localhost').pathname !== '/signal' || !validOrigin(req)) {
+    console.warn('[ws] Upgrade rejected: path/origin mismatch', { host: req.headers.host, origin: req.headers.origin });
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return;
+  }
   const session = getSession(req);
-  if (!session) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
-  if (peers.size >= 2) { socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n'); socket.destroy(); return; }
+  if (!session) { console.warn('[ws] Upgrade rejected: missing/expired session'); socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+  if (peers.size >= 2) { console.warn('[ws] Upgrade rejected: room full'); socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n'); socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => {
     if (peers.size >= 2) { ws.close(1013, 'Room full'); return; }
     const id = crypto.randomUUID();
     const hadPeer = peers.size > 0;
     peers.set(ws, { id, sessionKey: session.key });
+    console.info('[ws] Connected', { participants: peers.size });
     send(ws, { type: 'welcome', id, count: peers.size, shouldOffer: hadPeer, floorOwner: floorOwner ? peers.get(floorOwner)?.id : null });
     broadcast({ type: 'peer-joined', id }, ws);
     status();
@@ -162,6 +170,7 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('close', () => {
       releaseFloor(ws);
       peers.delete(ws);
+      console.info('[ws] Disconnected', { participants: peers.size });
       broadcast({ type: 'peer-left' });
       status();
     });
