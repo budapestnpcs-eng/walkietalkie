@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Privát Walkie-Talkie</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css" />
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div class="brand"><span class="brand-icon">◉</span><span>WALKIE<span class="brand-muted">/</span>TALKIE</span></div>
+      <span class="private-pill"><span class="private-dot"></span> PRIVÁT CSATORNA</span>
+    </header>
+    <main>
+      <section id="loginView" class="panel login-panel hidden" aria-label="Bejelentkezés">
+        <div class="eyebrow">BIZTONSÁGOS HOZZÁFÉRÉS</div>
+        <h1>Csak kettőtöknek.</h1>
+        <p class="subtitle">Írd be a közös jelszót a privát hangcsatorna megnyitásához.</p>
+        <form id="loginForm" class="login-form">
+          <label for="password">Csatorna jelszava</label>
+          <input id="password" type="password" minlength="1" autocomplete="current-password" placeholder="Add meg a jelszót" required />
+          <button type="submit" id="loginButton" class="primary-button">Belépés <span aria-hidden="true">→</span></button>
+          <p class="error" id="loginError" role="alert"></p>
+        </form>
+        <p class="small-muted">A hozzáférést a szerver ellenőrzi. Maximum két eszköz lehet jelen egyszerre.</p>
+      </section>
+
+      <section id="roomView" class="panel room-panel hidden" aria-label="Hangcsatorna">
+        <div class="room-head">
+          <div><div class="eyebrow">01 / PRIVÁT SZOBA</div><h1>Élő csatorna</h1></div>
+          <button id="logoutBtn" class="link-button" type="button">Kilépés</button>
+        </div>
+        <div class="connection-card">
+          <div class="status-icon" id="statusIcon">◌</div>
+          <div class="status-info"><strong id="statusText">Kapcsolódás...</strong><span id="statusDetail">Csatlakozás a szerverhez</span></div>
+          <span class="users" id="usersBadge">0 / 2</span>
+        </div>
+        <div class="ptt-container">
+          <div class="ring ring-outer"><div class="ring ring-inner">
+            <button id="talkButton" class="talk-button" type="button" disabled aria-label="Nyomva tartva beszélhetsz">
+              <svg viewBox="0 0 64 64" width="60" height="60" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="24" y="10" width="16" height="30" rx="8"/><path d="M17 29v5a15 15 0 0 0 30 0v-5M32 49v8M22 57h20"/></svg>
+            </button>
+          </div></div>
+          <div class="talk-state" id="talkState">CSATLAKOZÁS SZÜKSÉGES</div>
+          <p class="talk-help" id="talkHelp">A beszédhez tartsd nyomva a gombot.</p>
+        </div>
+        <div class="controls"><button id="connectBtn" class="primary-button" type="button">Mikrofon aktiválása és csatlakozás</button><button id="disconnectBtn" class="outline-button hidden" type="button">Kapcsolat bontása</button></div>
+        <div class="notice" id="notice" role="status">A másik résztvevőnek is meg kell nyitnia ezt az oldalt, és be kell jelentkeznie.</div>
+        <button class="audio-unlock hidden" id="enableAudioBtn" type="button">🔊 Hang lejátszásának engedélyezése</button>
+        <audio id="remoteAudio" autoplay playsinline></audio>
+      </section>
+      <section id="loadingView" class="panel loading-panel">Betöltés…</section>
+    </main>
+    <footer>WEBRTC <span>•</span> VÉGPONTOK KÖZÖTTI HANG <span>•</span> NINCS HANGRÖGZÍTÉS</footer>
+  </div>
+</body>
+</html>
