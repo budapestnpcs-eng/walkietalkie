@@ -76,6 +76,7 @@ function stopVoxMonitor() {
 function setMode(vox) {
   stopTalk();
   voiceMode = vox;
+  if (vox && audioContext?.state === 'suspended') audioContext.resume().catch(() => {});
   voxLastSound = performance.now();
   ui.manualMode.classList.toggle('selected', !vox);
   ui.voiceMode.classList.toggle('selected', vox);
@@ -184,6 +185,8 @@ async function onSignal(data) {
   }
 }
 async function connect() {
+  if (ws && ws.readyState !== WebSocket.CLOSED) return;
+  if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   ui.connect.disabled = true;
   setStatus('Mikrofon engedélyezése…', 'Engedélyezd a mikrofon használatát');
   try {
@@ -224,6 +227,7 @@ async function connect() {
               : 'A szoba nem tele (' + room.count + ' / 2). A WebSocket-kapcsolat hibásodott meg. Ellenőrizd a Render Logs naplót.';
           }
         } catch { detail = 'A szerver nem érhető el. Ellenőrizd a Render állapotát.'; }
+        if (ws || intentionalDisconnect) return; // Ignore a stale close event after manual reconnection.
         setStatus('Nincs kapcsolat', 'WebSocket hiba (kód: ' + event.code + ')');
         const delay = Math.min(15000, 1500 * Math.pow(1.5, Math.min(reconnectAttempts++, 6)));
         message(detail + ' Automatikus újracsatlakozás következik.');
