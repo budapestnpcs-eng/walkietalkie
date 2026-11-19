@@ -1,0 +1,12 @@
+{
+  "name": "private-walkie-talkie",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Two-person password protected WebRTC push-to-talk website",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20.12" },
+  "dependencies": {}
+}
