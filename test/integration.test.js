@@ -80,8 +80,16 @@ test('end-to-end authentication and 2-person room', async () => {
     assert.match(cookie, /^walkie_session=/);
     res = await fetch(`${base}/api/me`, { headers: { Cookie: cookie } });
     assert.equal((await res.json()).authenticated, true);
+    // Each person signs in separately, even though the shared password is the same.
+    const secondLogin = await login('long-example-password-123');
+    assert.equal(secondLogin.status, 200);
+    const cookieB = secondLogin.headers.get('set-cookie').split(';')[0];
+    const thirdLogin = await login('long-example-password-123');
+    assert.equal(thirdLogin.status, 200);
+    const cookieC = thirdLogin.headers.get('set-cookie').split(';')[0];
+
     const a = await openSocket(cookie);
-    const b = await openSocket(cookie);
+    const b = await openSocket(cookieB);
     const floor = waitMessage(a, 'floor');
     a.send(JSON.stringify({type:'floor-request'}));
     assert.equal((await floor).owner !== null, true);
@@ -91,8 +99,13 @@ test('end-to-end authentication and 2-person room', async () => {
     const released = waitMessage(b, 'floor');
     a.send(JSON.stringify({type:'floor-release'}));
     assert.equal((await released).owner, null);
-    const third = await openSocket(cookie).then(ws => {ws.close();return 'accepted';}, () => 'rejected');
+    const third = await openSocket(cookieC).then(ws => {ws.close();return 'accepted';}, () => 'rejected');
     assert.equal(third, 'rejected');
+
+    // Reconnecting the same session replaces the stale old socket, and preserves capacity.
+    const bReconnected = await openSocket(cookieB);
+    assert.ok(bReconnected);
+    bReconnected.close();
     a.close(); b.close();
     res = await fetch(`${base}/api/logout`, {method:'POST',headers:{Origin:base,Cookie:cookie}});
     assert.equal(res.status, 200);
