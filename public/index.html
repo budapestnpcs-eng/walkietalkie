@@ -39,6 +39,15 @@
           <div class="status-info"><strong id="statusText">Kapcsolódás...</strong><span id="statusDetail">Csatlakozás a szerverhez</span></div>
           <span class="users" id="usersBadge">0 / 2</span>
         </div>
+        <div class="mode-switch" role="group" aria-label="Beszéd módja">
+          <button type="button" id="manualMode" class="mode-btn selected" aria-pressed="true">Nyomva tartás</button>
+          <button type="button" id="voiceMode" class="mode-btn" aria-pressed="false">Automatikus / VOX</button>
+        </div>
+        <div id="voxSettings" class="vox-settings hidden">
+          <div class="vox-row"><label for="voxSensitivity">Hangérzékenység</label><span id="voxLevel" class="vox-level">Mikrofon kikapcsolva</span></div>
+          <input id="voxSensitivity" type="range" min="-55" max="-20" step="1" value="-38" aria-label="Hangérzékenység" />
+          <p class="small-muted">Beszédre automatikusan adásba kapcsol, csend után elengedi a csatornát. Fejhallgató ajánlott.</p>
+        </div>
         <div class="ptt-container">
           <div class="ring ring-outer"><div class="ring ring-inner">
             <button id="talkButton" class="talk-button" type="button" disabled aria-label="Nyomva tartva beszélhetsz">
