@@ -78,6 +78,23 @@ async function body(req) {
 function send(ws, data) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data)); }
 function broadcast(data, except = null) { for (const ws of peers.keys()) if (ws !== except) send(ws, data); }
 function status() { broadcast({ type: 'presence', count: peers.size }); }
+function dropPeer(ws, reason = 'connection-lost') {
+  if (!peers.has(ws)) return;
+  releaseFloor(ws);
+  peers.delete(ws);
+  console.info('[ws] Removed', { reason, participants: peers.size });
+  broadcast({ type: 'peer-left', reason });
+  status();
+}
+function removeStalePeers() {
+  const now = Date.now();
+  for (const [ws, peer] of peers) {
+    if (ws.readyState !== WebSocket.OPEN || now - peer.lastPong > 30000) {
+      dropPeer(ws, 'connection-lost');
+      ws.terminate();
+    }
+  }
+}
 function releaseFloor(ws) {
   if (floorOwner === ws) { floorOwner = null; broadcast({ type: 'floor', owner: null }); }
 }
@@ -86,6 +103,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { authenticated: !!getSession(req) });
   if (pathname === '/api/room' && req.method === 'GET') {
     if (!getSession(req)) return json(res, 401, { error: 'Bejelentkezés szükséges' });
+    removeStalePeers();
     return json(res, 200, { count: peers.size, capacity: 2 });
   }
   if (pathname === '/api/config' && req.method === 'GET') {
@@ -143,12 +161,21 @@ server.on('upgrade', (req, socket, head) => {
   }
   const session = getSession(req);
   if (!session) { console.warn('[ws] Upgrade rejected: missing/expired session'); socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+  removeStalePeers();
+  // Reconnecting the same authenticated session replaces its previous socket.
+  for (const [existing, peer] of peers) {
+    if (peer.sessionKey === session.key) {
+      dropPeer(existing, 'reconnecting');
+      existing.terminate();
+    }
+  }
   if (peers.size >= 2) { console.warn('[ws] Upgrade rejected: room full'); socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n'); socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => {
     if (peers.size >= 2) { ws.close(1013, 'Room full'); return; }
     const id = crypto.randomUUID();
     const hadPeer = peers.size > 0;
-    peers.set(ws, { id, sessionKey: session.key });
+    peers.set(ws, { id, sessionKey: session.key, lastPong: Date.now() });
+    ws.on('pong', () => { const peer = peers.get(ws); if (peer) peer.lastPong = Date.now(); });
     console.info('[ws] Connected', { participants: peers.size });
     send(ws, { type: 'welcome', id, count: peers.size, shouldOffer: hadPeer, floorOwner: floorOwner ? peers.get(floorOwner)?.id : null });
     broadcast({ type: 'peer-joined', id }, ws);
@@ -167,16 +194,16 @@ server.on('upgrade', (req, socket, head) => {
         broadcast({ type: m.type, sdp: m.sdp, candidate: m.candidate }, ws);
       }
     });
-    ws.on('close', () => {
-      releaseFloor(ws);
-      peers.delete(ws);
-      console.info('[ws] Disconnected', { participants: peers.size });
-      broadcast({ type: 'peer-left' });
-      status();
-    });
+    ws.on('close', () => dropPeer(ws, 'connection-lost'));
     ws.on('error', () => {});
   });
 });
+setInterval(() => {
+  removeStalePeers();
+  for (const ws of peers.keys()) {
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
+  }
+}, 10000).unref();
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of sessions) if (v.until < now) sessions.delete(k);
