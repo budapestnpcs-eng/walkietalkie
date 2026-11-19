@@ -6,7 +6,10 @@ Magyar nyelvű, mobilon és asztali böngészőben működő, jelszóval védett
 
 - Egyszerű jelszavas belépőoldal (jelszó ellenőrzése a szerveren).
 - Legfeljebb **két aktív WebSocket-kapcsolat** ugyanabban a privát szobában.
-- Nyomva tartott beszédgomb, szerveroldalon koordinált beszédjog.
+- Két mód: **nyomva tartás** (PTT), illetve **automatikus, beszédre induló VOX** állítható érzékenységgel.
+- VOX módban a mikrofon folyamatosan érzékeli a helyi hangerőt, de hangot csak a megszerzett beszédjog alatt továbbít.
+- A hangszintet Web Audio API figyeli, a beszéd befejezése után rövid késleltetéssel elengedi a csatornát.
+- Szerveroldalon koordinált beszédjog, automatikus WebSocket-újracsatlakozás.
 - Alapvető sikertelen belépés elleni korlátozás, HttpOnly munkamenet-cookie, Origin-ellenőrzés.
 - WebRTC hangátvitel, alapértelmezett STUN-kiszolgáló és opcionális TURN-konfiguráció.
 - Külső NPM-csomag nélkül futó Node.js szerver.
@@ -76,5 +79,8 @@ Telefon A / böngésző                 Telefon B / böngésző
 - A munkamenetek és az aktuális szobaállapot memóriában vannak; szerver-újraindítás után elvesznek. Egyetlen futó szerverpéldányt használj.
 - A jelszót szerveroldalon ellenőrzi az alkalmazás; állíts be titkosított HTTPS-t és erős jelszót.
 - Éles, mobilhálózaton stabil használathoz TURN-szerver ajánlott.
-- Mobilböngészőkben a háttérbe helyezés és az automatikus hangindítás korlátozott lehet.
+- **VOX módban az oldalnak előtérben kell lennie.** Mobilböngészőben az alkalmazás háttérbe helyezése felfüggesztheti a Web Audio feldolgozást és a WebRTC-t.
+- Hangszórónál a visszahallott beszéd bekapcsolhatja a VOX-ot; fejhallgató használata javasolt.
+- A VOX hangerőküszöbön alapul, nem professzionális beszédfelismerés: háttérzaj is aktiválhatja. Állítsd az érzékenységet az adott környezethez.
+- Elveszett mobilkapcsolat esetén a heartbeat maximum nagyjából 30 másodperc alatt elengedi a régi helyet, újracsatlakozáskor ugyanaz a munkamenet lecserélheti a régi kapcsolatát.
 - A WebRTC maga titkosított médiát használ, de ez a mintaprojekt **nem implementál külön, alkalmazásszintű E2EE protokollt**.
