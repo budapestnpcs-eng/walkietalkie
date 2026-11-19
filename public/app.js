@@ -6,11 +6,16 @@ const ui = {
   connect: $('connectBtn'), disconnect: $('disconnectBtn'), logout: $('logoutBtn'),
   talk: $('talkButton'), talkState: $('talkState'), talkHelp: $('talkHelp'),
   status: $('statusText'), detail: $('statusDetail'), badge: $('usersBadge'),
-  notice: $('notice'), remoteAudio: $('remoteAudio'), enableAudio: $('enableAudioBtn')
+  notice: $('notice'), remoteAudio: $('remoteAudio'), enableAudio: $('enableAudioBtn'),
+  manualMode: $('manualMode'), voiceMode: $('voiceMode'), voxSettings: $('voxSettings'),
+  voxSensitivity: $('voxSensitivity'), voxLevel: $('voxLevel')
 };
 let ws = null, pc = null, localStream = null, localId = null;
 let peerCount = 0, currentFloorOwner = null, wantsToTalk = false;
 let iceServers = [], pendingCandidates = [], intentionalDisconnect = false;
+let outputStream = null, audioContext = null, analyser = null, analyserSamples = null;
+let voiceMode = false, voxFrame = null, voxLastSound = 0, voxLastRequest = 0, reconnectTimer = null, reconnectAttempts = 0;
+const VOX_HOLD_MS = 750;
 function show(which) { for (const key of ['loading','login','room']) ui[key].classList.toggle('hidden', key !== which); }
 function setStatus(status, detail) { ui.status.textContent = status; ui.detail.textContent = detail; }
 function message(msg) { ui.notice.textContent = msg; }
@@ -21,17 +26,66 @@ function updateUI() {
   ui.connect.classList.toggle('hidden', ready);
   ui.disconnect.classList.toggle('hidden', !ready);
   const otherSpeaking = currentFloorOwner && currentFloorOwner !== localId;
-  ui.talk.disabled = !ready || !!otherSpeaking;
+  ui.talk.disabled = !ready || !!otherSpeaking || voiceMode;
   ui.talk.classList.toggle('talking', ready && currentFloorOwner === localId);
   if (!ready) { ui.talkState.textContent = 'CSATLAKOZÁS SZÜKSÉGES'; ui.talkHelp.textContent = 'Aktiváld a mikrofont a folytatáshoz.'; }
   else if (currentFloorOwner === localId) { ui.talkState.textContent = 'ADÁS FOLYAMATBAN'; ui.talkHelp.textContent = 'Engedd fel a gombot, ha végeztél.'; }
   else if (otherSpeaking) { ui.talkState.textContent = 'A MÁSIK FÉL BESZÉL'; ui.talkHelp.textContent = 'Hallgatás – a csatorna jelenleg foglalt.'; }
+  else if (voiceMode) { ui.talkState.textContent = 'AUTOMATIKUS HANGÉRZÉKELÉS'; ui.talkHelp.textContent = 'Beszélj: a mikrofon automatikusan adásba kapcsol.'; }
   else { ui.talkState.textContent = 'TARTSD NYOMVA A BESZÉDHEZ'; ui.talkHelp.textContent = 'Telefonon érintsd meg, számítógépen nyomd meg.'; }
   ui.badge.textContent = `${peerCount} / 2`;
 }
-function stopSending() { if (localStream) for (const track of localStream.getAudioTracks()) track.enabled = false; }
-function startTalk() {
-  if (!isConnected() || ui.talk.disabled || wantsToTalk) return;
+function stopSending() { if (outputStream) for (const track of outputStream.getAudioTracks()) track.enabled = false; }
+function startVoxMonitor() {
+  if (!localStream || audioContext) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) { message('Ez a böngésző nem támogatja a hangérzékelést. Használd a kézi módot.'); return; }
+  audioContext = new Ctx();
+  const source = audioContext.createMediaStreamSource(localStream);
+  analyser = audioContext.createAnalyser();
+  analyser.fftSize = 1024;
+  analyserSamples = new Float32Array(analyser.fftSize);
+  source.connect(analyser);
+  const tick = () => {
+    voxFrame = requestAnimationFrame(tick);
+    if (!analyser) return;
+    analyser.getFloatTimeDomainData(analyserSamples);
+    let sum = 0;
+    for (const v of analyserSamples) sum += v * v;
+    const db = 20 * Math.log10(Math.sqrt(sum / analyserSamples.length) + 1e-8);
+    ui.voxLevel.textContent = db > -75 ? Math.round(db) + ' dB' : 'Csend';
+    if (!voiceMode || !isConnected() || document.hidden) return;
+    const now = performance.now();
+    const threshold = Number(ui.voxSensitivity.value);
+    if (db > threshold) {
+      voxLastSound = now;
+      if (!wantsToTalk && currentFloorOwner !== localId && now - voxLastRequest > 1000) {
+        voxLastRequest = now;
+        startTalk(true);
+      }
+    } else if (wantsToTalk && now - voxLastSound > VOX_HOLD_MS) stopTalk();
+  };
+  tick();
+}
+function stopVoxMonitor() {
+  if (voxFrame !== null) cancelAnimationFrame(voxFrame);
+  voxFrame = null; analyser = null; analyserSamples = null;
+  if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
+  ui.voxLevel.textContent = 'Mikrofon kikapcsolva';
+}
+function setMode(vox) {
+  stopTalk();
+  voiceMode = vox;
+  voxLastSound = performance.now();
+  ui.manualMode.classList.toggle('selected', !vox);
+  ui.voiceMode.classList.toggle('selected', vox);
+  ui.manualMode.setAttribute('aria-pressed', String(!vox));
+  ui.voiceMode.setAttribute('aria-pressed', String(vox));
+  ui.voxSettings.classList.toggle('hidden', !vox);
+  updateUI();
+}
+function startTalk(automatic = false) {
+  if (!isConnected() || (ui.talk.disabled && !automatic) || wantsToTalk || (currentFloorOwner && currentFloorOwner !== localId)) return;
   wantsToTalk = true;
   send('floor-request');
 }
@@ -50,9 +104,12 @@ function closePc() {
   pendingCandidates = [];
 }
 function cleanup() {
+  if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopTalk();
+  stopVoxMonitor();
   if (ws) { const old = ws; ws = null; old.onclose = null; old.close(); }
   closePc();
+  if (outputStream) { outputStream.getTracks().forEach(track => track.stop()); outputStream = null; }
   if (localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
   localId = null; peerCount = 0; currentFloorOwner = null;
   ui.enableAudio.classList.add('hidden');
@@ -61,7 +118,7 @@ function cleanup() {
 async function makePeerConnection() {
   closePc();
   pc = new RTCPeerConnection({ iceServers });
-  for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+  for (const track of outputStream.getTracks()) pc.addTrack(track, outputStream);
   pc.onicecandidate = e => { if (e.candidate) send('ice', { candidate: e.candidate.toJSON() }); };
   pc.ontrack = e => {
     ui.remoteAudio.srcObject = e.streams[0] || new MediaStream([e.track]);
@@ -97,8 +154,8 @@ async function onSignal(data) {
       peerCount = 2; setStatus('Kapcsolódás…', 'Hangkapcsolat felépítése'); updateUI(); break;
     case 'peer-left':
       stopTalk(); currentFloorOwner = null; peerCount = 1; closePc();
-      setStatus('Várakozás a másik félre', 'A másik résztvevő kilépett');
-      message('A másik fél kilépett. A kapcsolat automatikusan felépül, amikor visszatér.');
+      setStatus('Várakozás a másik félre', 'A másik fél kapcsolata megszakadt vagy újracsatlakozik');
+      message('A másik fél pillanatnyilag nem elérhető. Amint visszakapcsolódik, a hangkapcsolat felépül.');
       updateUI(); break;
     case 'offer': {
       const earlyCandidates = pendingCandidates.splice(0);
@@ -118,7 +175,7 @@ async function onSignal(data) {
     case 'floor':
       currentFloorOwner = data.owner;
       if (currentFloorOwner === localId) {
-        if (wantsToTalk) { for (const track of localStream.getAudioTracks()) track.enabled = true; }
+        if (wantsToTalk && outputStream) { for (const track of outputStream.getAudioTracks()) track.enabled = true; }
         else { stopSending(); send('floor-release'); currentFloorOwner = null; }
       } else stopSending();
       updateUI(); break;
@@ -134,17 +191,20 @@ async function connect() {
     const roomResp = await fetch('/api/room', { cache: 'no-store' });
     if (!roomResp.ok) throw new Error('Nem sikerült ellenőrizni a szoba állapotát. Jelentkezz be újra.');
     const roomInfo = await roomResp.json();
-    if (roomInfo.count >= roomInfo.capacity) throw new Error('A szoba valóban tele van (2 / 2). Ha te vagy bent egy másik lapon, ott bontsd a kapcsolatot.');
+    // Don't refuse here: a stale socket from this session may be occupying a slot.
+    // The server replaces it after successful authenticated WebSocket upgrade.
     const configResp = await fetch('/api/config');
     if (!configResp.ok) throw new Error('Lejárt a bejelentkezés. Lépj be újra.');
     iceServers = (await configResp.json()).iceServers;
     localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    outputStream = new MediaStream(localStream.getAudioTracks().map(track => track.clone()));
     stopSending();
+    startVoxMonitor();
     intentionalDisconnect = false;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${protocol}//${location.host}/signal`);
     ws = socket;
-    socket.onopen = () => { setStatus('Csatlakozva', 'Hangcsatorna elérhető'); updateUI(); };
+    socket.onopen = () => { reconnectAttempts = 0; setStatus('Csatlakozva', 'Hangcsatorna elérhető'); updateUI(); };
     socket.onmessage = event => {
       try { onSignal(JSON.parse(event.data)).catch(err => { console.error(err); message('Hiba a hangkapcsolat felépítése közben. Csatlakozz újra.'); }); }
       catch (err) { console.error(err); }
@@ -165,13 +225,21 @@ async function connect() {
           }
         } catch { detail = 'A szerver nem érhető el. Ellenőrizd a Render állapotát.'; }
         setStatus('Nincs kapcsolat', 'WebSocket hiba (kód: ' + event.code + ')');
-        message(detail);
+        const delay = Math.min(15000, 1500 * Math.pow(1.5, Math.min(reconnectAttempts++, 6)));
+        message(detail + ' Automatikus újracsatlakozás következik.');
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          if (!intentionalDisconnect) connect();
+        }, delay);
       }
     };
     socket.onerror = () => { setStatus('Kapcsolódási hiba', 'Nem sikerült elérni a szervert'); };
     message('Várakozás a másik félre…');
   } catch (err) {
     console.error(err); cleanup(); setStatus('Nem sikerült csatlakozni', 'Ellenőrizd a mikrofon engedélyét'); message(err.message || 'Váratlan hiba');
+    if (!intentionalDisconnect && String(err.message).includes('Lejárt') === false && String(err.message).includes('engedély') === false) {
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; if (!intentionalDisconnect) connect(); }, 5000);
+    }
   } finally { ui.connect.disabled = false; updateUI(); }
 }
 ui.form.addEventListener('submit', async e => {
@@ -185,21 +253,26 @@ ui.form.addEventListener('submit', async e => {
   } catch (err) { ui.loginError.textContent = err.message; }
   finally { ui.loginButton.disabled = false; }
 });
-ui.connect.addEventListener('click', connect);
+ui.connect.addEventListener('click', () => { reconnectAttempts = 0; connect(); });
+ui.manualMode.addEventListener('click', () => setMode(false));
+ui.voiceMode.addEventListener('click', () => setMode(true));
 ui.disconnect.addEventListener('click', () => { intentionalDisconnect = true; cleanup(); setStatus('Kapcsolat bontva', 'Bármikor újra csatlakozhatsz'); });
 ui.logout.addEventListener('click', async () => {
   intentionalDisconnect = true; cleanup();
   try { await fetch('/api/logout', { method: 'POST' }); } catch {}
   show('login');
 });
-ui.talk.addEventListener('pointerdown', e => { e.preventDefault(); ui.talk.setPointerCapture(e.pointerId); startTalk(); });
+ui.talk.addEventListener('pointerdown', e => { e.preventDefault(); if (!voiceMode) { ui.talk.setPointerCapture(e.pointerId); startTalk(); } });
 for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) ui.talk.addEventListener(event, stopTalk);
 ui.talk.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space' && e.target === document.body && !e.repeat && !e.altKey && !e.ctrlKey) { e.preventDefault(); startTalk(); }
+  if (!voiceMode && e.code === 'Space' && e.target === document.body && !e.repeat && !e.altKey && !e.ctrlKey) { e.preventDefault(); startTalk(); }
 });
 document.addEventListener('keyup', e => { if (e.code === 'Space' && wantsToTalk) { e.preventDefault(); stopTalk(); } });
-document.addEventListener('visibilitychange', () => { if (document.hidden) stopTalk(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopTalk();
+  else if (audioContext?.state === 'suspended') audioContext.resume().catch(() => {});
+});
 window.addEventListener('blur', stopTalk);
 ui.enableAudio.addEventListener('click', async () => {
   try { await ui.remoteAudio.play(); ui.enableAudio.classList.add('hidden'); }
